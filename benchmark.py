@@ -244,9 +244,9 @@ if __name__ == '__main__':
                         draft_lens = ['{:.4f}'.format(a/b) for a, b in zip(total_draft_nums, model.actual_iters)]
                         accept_lens = ['{:.4f}'.format(a/b) for a, b in zip(total_accept_nums, model.actual_iters)]
                         print(f"Draft lens: {', '.join(draft_lens)}, Accept lens: {', '.join(accept_lens)}")
-            else:
-                print(f"First cost: {model.first_cost}")
-                print(f"Rest mean: {model.rest_cost_mean}")
+                else:
+                    print(f"First cost: {model.first_cost}")
+                    print(f"Rest mean: {model.rest_cost_mean}")
 
         print(f"E2E Generation time {(np.mean(e2e_time)):.4f}")
 
