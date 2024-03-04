@@ -2386,6 +2386,15 @@ class BenchmarkWrapper:
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
             )
+            import os
+            _enable_ipex = os.getenv("BIGDL_OPT_IPEX")
+            _enable_ipex = (_enable_ipex is not None) and (_enable_ipex.lower() == "true")
+            if _enable_ipex:
+                outputs = CausalLMOutputWithPast(
+                    logits=outputs[0],
+                    past_key_values=outputs[1],
+                )
+            
             if synced_gpus and this_peer_finished:
                 continue  # don't waste resources running the code we don't need
 
