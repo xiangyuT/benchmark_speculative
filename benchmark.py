@@ -81,6 +81,7 @@ if __name__ == '__main__':
                         help='draft stop probility')
     parser.add_argument('--speculative', action='store_true')
     parser.add_argument('--same-prompt', action='store_true')
+    parser.add_argument('--low-bit', type=str, default='bf16')
 
     parser.add_argument('--warmup', type=int, default=1)
     parser.add_argument('--num_iter', type=int, default=3)
@@ -98,11 +99,18 @@ if __name__ == '__main__':
     # Load model in optimized bf16 here.
     # Set `speculative=True`` to enable speculative decoding,
     # it only works when load_in_low_bit="fp16" on Intel GPU or load_in_low_bit="bf16" on latest Intel Xeon CPU
+
+    low_bit = args.low_bit
+    torch_dtype = 'auto'
+    if low_bit == 'bf16':
+        torch_dtype = torch.bfloat16
+    elif low_bit == 'sym_int4':
+        torch_dtype = 'auto'
     model = AutoModelForCausalLM.from_pretrained(model_path,
                                                  optimize_model=True,
-                                                 torch_dtype=torch.bfloat16,
+                                                 torch_dtype=torch_dtype,
                                                  low_cpu_mem_usage=True, 
-                                                 load_in_low_bit="bf16",
+                                                 load_in_low_bit=low_bit,
                                                  torchscript=True,
                                                  speculative=args.speculative,
                                                  trust_remote_code=True,
@@ -139,31 +147,9 @@ if __name__ == '__main__':
         print(input_ids.shape)
         attention_mask = inputs.attention_mask.to(model.device)
 
-        # input_ids = tokenizer(prompt, return_tensors='pt').input_ids.to(model.device)
         actual_in_len = input_ids.shape[1]
         print("actual input_ids length:" + str(actual_in_len))
 
-        # # warmup
-        # if args.speculative:
-        #     output = model.generate(input_ids,
-        #                             max_new_tokens=args.n_predict,
-        #                             min_new_tokens=args.n_predict,
-        #                             th_stop_draft=args.th_stop_draft,
-        #                             pad_token_id=tokenizer.pad_token_id,
-        #                             eos_token_id=tokenizer.eos_token_id,
-        #                             attention_mask=attention_mask,
-        #                             auto_th_stop_draft=False,
-        #                             th_batch_num=0.99,
-        #                             do_sample=False)
-        # else:
-        #     output = model.generate(input_ids,
-        #                             min_new_tokens=args.n_predict,
-        #                             max_new_tokens=args.n_predict,
-        #                             attention_mask=attention_mask,
-        #                             do_sample=False)
-        # output_str = tokenizer.decode(output[0])
-
-        # speculative decoding
         for _ in range(args.warmup + args.num_iter):
             st = time.perf_counter()
             if args.speculative:
