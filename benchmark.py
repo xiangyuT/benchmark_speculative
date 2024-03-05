@@ -67,6 +67,10 @@ draft_times = []
 verify_times = []
 generate_times = []
 
+import os
+_enable_ipex = os.getenv("BIGDL_OPT_IPEX")
+_enable_ipex = (_enable_ipex is not None) and (_enable_ipex.lower() == "true")
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Benchmark util for speculative decoding')
@@ -86,7 +90,10 @@ if __name__ == '__main__':
     parser.add_argument('--warmup', type=int, default=1)
     parser.add_argument('--num_iter', type=int, default=3)
     parser.add_argument('--verbose', action='store_true')
-
+    
+    parser.add_argument('--ipex-gptq-int4-model-path', type=str, default='')
+    parser.add_argument('--ipex-best-model-path', type=str, default='')
+    
     args = parser.parse_args()
     model_path = args.repo_id_or_model_path
     batch_size = args.batch_size
@@ -114,10 +121,16 @@ if __name__ == '__main__':
                                                  torchscript=True,
                                                  speculative=args.speculative,
                                                  trust_remote_code=True,
+                                                 ipex_gptq_int4_model_path=args.ipex_gptq_int4_model_path,
+                                                 ipex_best_model_path=args.ipex_best_model_path,
                                                  use_cache=True)
     if not args.speculative:
-        from benchmark_util import BenchmarkWrapper
-        model = BenchmarkWrapper(model)
+        if not _enable_ipex:
+            from benchmark_util import BenchmarkWrapper
+            model = BenchmarkWrapper(model)
+        else:
+            if not hasattr(model.config, "token_latency"):
+                model.config.token_latency = True
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, padding_side='left')
     if tokenizer.pad_token is None:
@@ -162,7 +175,7 @@ if __name__ == '__main__':
                                         attention_mask=attention_mask,
                                         auto_th_stop_draft=False,
                                         th_batch_num=0.99,
-                                        # max_step_draft=1,
+                                        # max_step_draft=3,
                                         do_sample=False)
             else:
                 output = model.generate(input_ids,
@@ -170,7 +183,8 @@ if __name__ == '__main__':
                                         min_new_tokens=args.n_predict,
                                         attention_mask=attention_mask,
                                         do_sample=False)
-            output_str = tokenizer.decode(output[0], skip_special_tokens=True)
+            gen_ids = output[0] if _enable_ipex and (not args.speculative) else output
+            output_str = tokenizer.batch_decode(gen_ids, skip_special_tokens=True)
             end = time.perf_counter()
 
             if _ < args.warmup:
@@ -187,12 +201,17 @@ if __name__ == '__main__':
 
                 rest_costs.append((e2e_time[-1]-first_costs[-1])/(num_tokens[-1]-1))
             else:
-                first_costs.append(model.first_cost)
-                rest_costs.append(model.rest_cost_mean)
+                if not _enable_ipex:
+                    first_costs.append(model.first_cost)
+                    rest_costs.append(model.rest_cost_mean)
+                else:
+                    total_list = output[1]
+                    first_costs.append(total_list[0])
+                    rest_costs.append(np.mean(total_list[1:]))
 
             if args.verbose:
                 for i in range(batch_size):
-                    clean_output = output[i, actual_in_len:]
+                    clean_output = gen_ids[i, actual_in_len:]
                     mask = clean_output != tokenizer.pad_token_id
                     clean_output = clean_output[mask]
                     output_str = tokenizer.decode(clean_output, skip_special_tokens=False)
@@ -231,8 +250,12 @@ if __name__ == '__main__':
                         accept_lens = ['{:.4f}'.format(a/b) for a, b in zip(total_accept_nums, model.actual_iters)]
                         print(f"Draft lens: {', '.join(draft_lens)}, Accept lens: {', '.join(accept_lens)}")
                 else:
-                    print(f"First cost: {model.first_cost}")
-                    print(f"Rest mean: {model.rest_cost_mean}")
+                    if not _enable_ipex:
+                        print(f"First cost: {model.first_cost}")
+                        print(f"Rest mean: {model.rest_cost_mean}")
+                    else:
+                        print(f"First cost: {first_costs[-1]}")
+                        print(f"Rest mean: {rest_costs[-1]}")
 
         print(f"E2E Generation time {(np.mean(e2e_time)):.4f}")
 
