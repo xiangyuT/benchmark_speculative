@@ -16,7 +16,7 @@
 
 import torch
 from bigdl.llm.transformers import AutoModel, AutoModelForCausalLM
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, LlamaTokenizer
 import argparse
 import time
 import numpy as np
@@ -46,12 +46,12 @@ LLAMA2_PROMPT_FORMAT = """### HUMAN:
 
 BAICHUAN_PROMPT_FORMAT = "<human>{prompt} <bot>"
 
-# import intel_extension_for_pytorch as ipex
-# torch._C._jit_set_texpr_fuser_enabled(False)
-# try:
-#     ipex._C.disable_jit_linear_repack()
-# except Exception:
-#     pass
+import intel_extension_for_pytorch as ipex
+torch._C._jit_set_texpr_fuser_enabled(False)
+try:
+    ipex._C.disable_jit_linear_repack()
+except Exception:
+    pass
 
 import json
 
@@ -70,7 +70,7 @@ generate_times = []
 import os
 _enable_ipex = os.getenv("BIGDL_OPT_IPEX")
 _enable_ipex = (_enable_ipex is not None) and (_enable_ipex.lower() == "true")
-
+print("benchmark enable_ipex: ", _enable_ipex)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Benchmark util for speculative decoding')
@@ -121,8 +121,6 @@ if __name__ == '__main__':
                                                  torchscript=True,
                                                  speculative=args.speculative,
                                                  trust_remote_code=True,
-                                                 ipex_gptq_int4_model_path=args.ipex_gptq_int4_model_path,
-                                                 ipex_best_model_path=args.ipex_best_model_path,
                                                  use_cache=True)
     if not args.speculative:
         if not _enable_ipex:
@@ -155,7 +153,7 @@ if __name__ == '__main__':
     with torch.inference_mode():
         prompts = prompt_list
         
-        inputs = tokenizer(prompts, return_tensors='pt', padding=True)
+        inputs = tokenizer(prompts, return_tensors='pt')
         input_ids = inputs.input_ids.to(model.device)
         print(input_ids.shape)
         attention_mask = inputs.attention_mask.to(model.device)
@@ -168,14 +166,15 @@ if __name__ == '__main__':
             if args.speculative:
                 output = model.generate(input_ids,
                                         max_new_tokens=args.n_predict,
-                                        min_new_tokens=args.n_predict,
+                                        # min_new_tokens=args.n_predict,
                                         th_stop_draft=args.th_stop_draft,
                                         pad_token_id=tokenizer.pad_token_id,
                                         eos_token_id=tokenizer.eos_token_id,
                                         attention_mask=attention_mask,
                                         auto_th_stop_draft=False,
                                         th_batch_num=0.99,
-                                        # max_step_draft=3,
+                                        # min_step_draft=1,
+                                        # max_step_draft=1,
                                         do_sample=False)
             else:
                 output = model.generate(input_ids,
@@ -212,8 +211,16 @@ if __name__ == '__main__':
             if args.verbose:
                 for i in range(batch_size):
                     clean_output = gen_ids[i, actual_in_len:]
-                    mask = clean_output != tokenizer.pad_token_id
-                    clean_output = clean_output[mask]
+                    # clean_output = gen_ids[i, :]
+                    clean_output_list = clean_output.tolist()
+                    try:
+                        idx = clean_output_list.index(tokenizer.eos_token_id)
+                        clean_output = clean_output[:idx]
+                    except ValueError:
+                        pass
+                    
+                    # mask = clean_output != tokenizer.pad_token_id
+                    # clean_output = clean_output[mask] 
                     output_str = tokenizer.decode(clean_output, skip_special_tokens=False)
                     print(i,": ", output_str)
 
@@ -237,7 +244,7 @@ if __name__ == '__main__':
                     print(f"Accept {model.accept_num}")
                     print(f"Generation time {model.generate_time}")
                     
-                    if batch_size > 1:
+                    if batch_size > 1 and (not args.same_prompt):
                         total_draft_nums = [sum(column) for column in zip(*model.draft_nums)]
                         total_accept_nums = [sum(column) for column in zip(*model.accept_nums)]
 
